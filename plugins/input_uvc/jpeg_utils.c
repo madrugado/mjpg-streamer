@@ -32,6 +32,7 @@
 #include <assert.h>
 #include <time.h>
 #include <linux/limits.h>
+#include <sys/time.h>
 
 /* EXIF image data is always in TIFF format, even if embedded in another
  * file type. This consists of a constant header (TIFF file header,
@@ -113,17 +114,6 @@ struct tiff_writing {
     unsigned data_offset;
 };
 
-struct coord {
-	int x;
-	int y;
-	int width;
-	int height;
-	int minx;
-        int maxx;
-	int miny;
-        int maxy;
-};
-
 struct config {
 	const char *exif_text;
 };
@@ -160,20 +150,6 @@ static void put_stringentry(struct tiff_writing *into, unsigned tag, const char 
     put_direntry(into, str, stringlength);
     into->buf += 4;
 }
-static void put_subjectarea(struct tiff_writing *into, const struct coord *box)
-{
-    put_uint16(into->buf    , EXIF_TAG_SUBJECT_AREA);
-    put_uint16(into->buf + 2, TIFF_TYPE_USHORT);
-    put_uint32(into->buf + 4, 4 /* Four USHORTs */);
-    put_uint32(into->buf + 8, into->data_offset);
-    into->buf += 12;
-    JOCTET *ool = into->base + into->data_offset;
-    put_uint16(ool  , box->x); /* Center.x */
-    put_uint16(ool+2, box->y); /* Center.y */
-    put_uint16(ool+4, box->width);
-    put_uint16(ool+6, box->height);
-    into->data_offset += 8;
-}
 
 /*
  * put_jpeg_exif writes the EXIF APP1 chunk to the jpeg file.
@@ -182,18 +158,17 @@ static void put_subjectarea(struct tiff_writing *into, const struct coord *box)
  */
 static void put_jpeg_exif(j_compress_ptr cinfo,
 			  const struct context *cnt,
-			  const time_t time,
-			  const struct coord *box)
+			  const struct timeval *time)
 {
     /* description, datetime, and subtime are the values that are actually
      * put into the EXIF data
      */
     char *description, *datetime, *subtime;
-    char datetime_buf[22];
+    char datetime_buf[22], subtime_buf[5];
 
     struct tm *timestamp = NULL;
     if (time) 
-	    timestamp = localtime(&time);
+	    timestamp = localtime(&(time->tv_sec));
 
     if (timestamp) {
 	/* Exif requires this exact format */
@@ -209,9 +184,14 @@ static void put_jpeg_exif(j_compress_ptr cinfo,
 	datetime = NULL;
     }
 
-    // TODO: Extract subsecond timestamp from somewhere, but only
-    // use as much of it as is indicated by conf->frame_limit
-    subtime = NULL;
+    /* Exif is not specified the format of subsectime, but since we have unixtime
+     * we'll use 000 as format. */
+    if (time) {
+	suseconds_t subtimestamp = time->tv_usec - (time->tv_usec / 1000) * 1000;
+	snprintf(subtime_buf, 4, "%03d", subtimestamp);	
+	subtime = subtime_buf;
+    } else
+    	subtime = NULL;
 
     if (cnt->conf.exif_text) {
 	description = malloc(PATH_MAX);
@@ -252,10 +232,6 @@ static void put_jpeg_exif(j_compress_ptr cinfo,
     if (subtime) {
 	ifd1_tagcount ++;
 	datasize += 5 + strlen(subtime);
-    }
-    if (box) {
-	ifd1_tagcount ++;
-	datasize += 2 * 4;  /* Four 16-bit ints */
     }
     if (ifd1_tagcount > 0) {
 	/* If we're writing the Exif sub-IFD, account for the
@@ -322,8 +298,6 @@ static void put_jpeg_exif(j_compress_ptr cinfo,
 
 	if (datetime)
 	    put_stringentry(&writing, EXIF_TAG_ORIGINAL_DATETIME, datetime, 1);
-	if (box)
-	    put_subjectarea(&writing, box);
 	if (subtime)
 	    put_stringentry(&writing, EXIF_TAG_ORIGINAL_DATETIME_SS, subtime, 0);
 
@@ -479,6 +453,10 @@ int compress_yuyv_to_jpeg(struct vdIn *vd, unsigned char *buffer, int size, int 
     jpeg_set_quality(&cinfo, quality, TRUE);
 
     jpeg_start_compress(&cinfo, TRUE);
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    put_jpeg_exif(&cinfo, NULL, &tv);
 
     z = 0;
     while(cinfo.next_scanline < vd->height) {
