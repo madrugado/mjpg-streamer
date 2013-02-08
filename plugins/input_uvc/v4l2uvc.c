@@ -29,6 +29,8 @@
 #include "huffman.h"
 #include "dynctrl.h"
 
+#include "exif.h"
+
 static int debug = 0;
 
 /* ioctl with a number of retries in the case of failure
@@ -386,6 +388,161 @@ int is_huffman(unsigned char *buf)
     return 0;
 }
 
+int put_v4l2_exif(unsigned char *out, const struct timeval *time)
+{
+    /* description, datetime, and subtime are the values that are actually
+     * put into the EXIF data
+     */
+    char *datetime, *subtime;
+    char datetime_buf[22], subtime_buf[5];
+
+    struct tm *timestamp = NULL;
+    if (time) 
+	    timestamp = localtime(&(time->tv_sec));
+
+    if (timestamp) {
+	/* Exif requires this exact format */
+	snprintf(datetime_buf, 21, "%04d:%02d:%02d %02d:%02d:%02d",
+		 timestamp->tm_year + 1900,
+		 timestamp->tm_mon + 1,
+		 timestamp->tm_mday,
+		 timestamp->tm_hour,
+		 timestamp->tm_min,
+		 timestamp->tm_sec);
+	datetime = datetime_buf;
+    } else {
+	datetime = NULL;
+    }
+
+    /* Exif is not specified the format of subsectime, but since we have unixtime
+     * we'll use 000 as format. 
+     */
+    if (time) {
+	suseconds_t subtimestamp = time->tv_usec - (time->tv_usec / 1000) * 1000;
+	snprintf(subtime_buf, 4, "%03d", subtimestamp);	
+	subtime = subtime_buf;
+    } else
+    	subtime = NULL;
+
+    /* Calculate an upper bound on the size of the APP1 marker so
+     * we can allocate a buffer for it.
+     */
+
+    /* Count up the number of tags and max amount of OOL data */
+    int ifd0_tagcount = 0;
+    int ifd1_tagcount = 0;
+    unsigned datasize = 0;
+
+    if (datetime) {
+	/* We write this to both the TIFF datetime tag (which most programs
+	 * treat as "last-modified-date") and the EXIF "time of creation of
+	 * original image" tag (which many programs ignore). This is
+	 * redundant but seems to be the thing to do.
+	 */
+	ifd0_tagcount ++;
+	ifd1_tagcount ++;
+	/* We also write the timezone-offset tag in IFD0 */
+	ifd0_tagcount ++;
+	/* It would be nice to use the same offset for both tags' values,
+	 * but I don't want to write the bookkeeping for that right now */
+	datasize += 2 * (5 + strlen(datetime));
+    }
+    if (subtime) {
+	ifd1_tagcount ++;
+	datasize += 5 + strlen(subtime);
+    }
+    if (ifd1_tagcount > 0) {
+	/* If we're writing the Exif sub-IFD, account for the
+	 * two tags that requires */
+	ifd0_tagcount ++; /* The tag in IFD0 that points to IFD1 */
+	ifd1_tagcount ++; /* The EXIF version tag */
+    }
+
+    /* Each IFD takes 12 bytes per tag, plus six more (the tag count and the
+     * pointer to the next IFD, always zero in our case)
+     */
+    unsigned int ifds_size =
+	( ifd1_tagcount > 0 ? ( 12 * ifd1_tagcount + 6 ) : 0 ) +
+	( ifd0_tagcount > 0 ? ( 12 * ifd0_tagcount + 6 ) : 0 );
+
+    if (ifds_size == 0) {
+	/* We're not actually going to write any information. */
+	return 0;
+    }
+
+    unsigned int buffer_size = 6 /* EXIF marker signature */ +
+                               8 /* TIFF file header */ +
+                               ifds_size /* the tag directories */ +
+                               datasize;
+
+    JOCTET *marker = malloc(buffer_size);
+    memcpy(marker, exif_marker_start, 14); /* EXIF and TIFF headers */
+    struct tiff_writing writing = (struct tiff_writing){
+	.base = marker + 6, /* base address for intra-TIFF offsets */
+	.buf = marker + 14, /* current write position */
+	.data_offset = 8 + ifds_size, /* where to start storing data */
+    };
+
+    /* Write IFD 0 */
+    /* Note that tags are stored in numerical order */
+    put_uint16(writing.buf, ifd0_tagcount);
+    writing.buf += 2;
+
+    if (datetime)
+	put_stringentry(&writing, TIFF_TAG_DATETIME, datetime, 1);
+    if (ifd1_tagcount > 0) {
+	/* Offset of IFD1 - TIFF header + IFD0 size. */
+	unsigned ifd1_offset = 8 + 6 + ( 12 * ifd0_tagcount );
+	memcpy(writing.buf, exif_subifd_tag, 8);
+	put_uint32(writing.buf + 8, ifd1_offset);
+	writing.buf += 12;
+    }
+    if (datetime) {
+        memcpy(writing.buf, exif_tzoffset_tag, 12);
+        put_sint16(writing.buf+8, timestamp->tm_gmtoff / 3600);
+        writing.buf += 12;
+    }
+    put_uint32(writing.buf, 0); /* Next IFD offset = 0 (no next IFD) */
+    writing.buf += 4;
+
+    /* Write IFD 1 */
+    if (ifd1_tagcount > 0) {
+	/* (remember that the tags in any IFD must be in numerical order
+	 * by tag) */
+	put_uint16(writing.buf, ifd1_tagcount);
+	memcpy(writing.buf + 2, exif_version_tag, 12); /* tag 0x9000 */
+	writing.buf += 14;
+
+	if (datetime)
+	    put_stringentry(&writing, EXIF_TAG_ORIGINAL_DATETIME, datetime, 1);
+	if (subtime)
+	    put_stringentry(&writing, EXIF_TAG_ORIGINAL_DATETIME_SS, subtime, 0);
+
+	put_uint32(writing.buf, 0); /* Next IFD = 0 (no next IFD) */
+	writing.buf += 4;
+    }
+
+    /* We should have met up with the OOL data */
+    assert( (writing.buf - writing.base) == 8 + ifds_size );
+
+    /* The buffer is complete; write it out */
+    unsigned marker_len = 6 + writing.data_offset;
+
+    /* assert we didn't underestimate the original buffer size */
+    assert(marker_len <= buffer_size);
+
+    /* EXIF data lives in a JPEG APP1 marker */
+    // TODO: replace with more straight way
+	out[0] = 0xFF;
+	out[1] = 0xE1;
+	put_uint16(out + 2, marker_len);
+	
+	memcpy(out + 4, marker, marker_len);
+
+    free(marker);
+	return marker_len + 4;
+}
+
 /******************************************************************************
 Description.:
 Input Value.:
@@ -399,6 +556,18 @@ int memcpy_picture(unsigned char *out, unsigned char *buf, int size)
     if(!is_huffman(buf)) {
         ptdeb = ptcur = buf;
         ptlimit = buf + size;
+
+	if (((ptcur[0] << 8) | ptcur[1]) == 0xffd8)
+	{
+		out[0] = 0xFF;
+		out[1] = 0xD8;
+		struct timeval tv;
+		gettimeoftheday(&tv, NULL);
+		pos += put_v4l2_exif(out + 2, &tv) + 2;
+		ptcur += 2;
+		ptdeb += 2;
+	}
+
         while((((ptcur[0] << 8) | ptcur[1]) != 0xffc0) && (ptcur < ptlimit))
             ptcur++;
         if(ptcur >= ptlimit)
