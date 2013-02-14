@@ -419,7 +419,7 @@ int put_v4l2_exif(unsigned char *out, const struct timeval *time)
      */
     if (time) {
 	suseconds_t subtimestamp = time->tv_usec - (time->tv_usec / 1000) * 1000;
-	snprintf(subtime_buf, 4, "%03d", subtimestamp);	
+	snprintf(subtime_buf, 4, "%03d", subtimestamp);
 	subtime = subtime_buf;
     } else
     	subtime = NULL;
@@ -557,16 +557,16 @@ int memcpy_picture(unsigned char *out, unsigned char *buf, int size)
         ptdeb = ptcur = buf;
         ptlimit = buf + size;
 
-	if (((ptcur[0] << 8) | ptcur[1]) == 0xffd8)
-	{
-		out[0] = 0xFF;
-		out[1] = 0xD8;
-		struct timeval tv;
-		gettimeoftheday(&tv, NULL);
-		pos += put_v4l2_exif(out + 2, &tv) + 2;
-		ptcur += 2;
-		ptdeb += 2;
-	}
+		if (((ptcur[0] << 8) | ptcur[1]) == 0xffd8)
+		{
+			out[0] = 0xFF;
+			out[1] = 0xD8;
+			struct timeval tv;
+			gettimeofday(&tv, NULL);
+			pos += put_v4l2_exif(out + 2, &tv) + 2;
+			ptcur += 2;
+			ptdeb += 2;
+		}
 
         while((((ptcur[0] << 8) | ptcur[1]) != 0xffc0) && (ptcur < ptlimit))
             ptcur++;
@@ -578,6 +578,19 @@ int memcpy_picture(unsigned char *out, unsigned char *buf, int size)
         memcpy(out + pos, dht_data, sizeof(dht_data)); pos += sizeof(dht_data);
         memcpy(out + pos, ptcur, size - sizein); pos += size - sizein;
     } else {
+    	if (((ptcur[0] << 8) | ptcur[1]) == 0xffd8)
+    	{
+    		out[0] = 0xFF;
+    		out[1] = 0xD8;
+    		struct timeval tv;
+    		gettimeofday(&tv, NULL);
+    		DBG("Getting Time\n");
+    		pos += 2; ptcur += 2;
+    		pos += put_v4l2_exif(out + 2, &tv);
+    		size -= 2;
+    		DBG("Time Is Written\n");
+    	}
+
         memcpy(out + pos, ptcur, size); pos += size;
     }
     return pos;
