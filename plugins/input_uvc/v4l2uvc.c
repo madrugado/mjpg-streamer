@@ -554,7 +554,8 @@ int memcpy_picture(unsigned char *out, unsigned char *buf, int size)
     int sizein, pos = 0;
 
     if(!is_huffman(buf)) {
-        ptdeb = ptcur = buf;
+        ptdeb = buf;
+        ptcur = buf;
         ptlimit = buf + size;
 
 		if (((ptcur[0] << 8) | ptcur[1]) == 0xffd8)
@@ -574,7 +575,7 @@ int memcpy_picture(unsigned char *out, unsigned char *buf, int size)
             return pos;
         sizein = ptcur - ptdeb;
 
-        memcpy(out + pos, buf, sizein); pos += sizein;
+        memcpy(out + pos, ptdeb, sizein); pos += sizein;
         memcpy(out + pos, dht_data, sizeof(dht_data)); pos += sizeof(dht_data);
         memcpy(out + pos, ptcur, size - sizein); pos += size - sizein;
     } else {
