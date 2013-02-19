@@ -126,14 +126,14 @@ typedef struct {
     pthread_t threadID;
 
     config conf;
-} context;
+} context_http;
 
 /*
  * this struct is just defined to allow passing all necessary details to a worker thread
  * "cfd" is for connected/accepted filedescriptor
  */
 typedef struct {
-    context *pc;
+    context_http *pc;
     int fd;
 } cfd;
 

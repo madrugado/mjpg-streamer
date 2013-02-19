@@ -43,7 +43,7 @@
 /*
  * keep context for each server
  */
-context servers[MAX_OUTPUT_PLUGINS];
+context_http servers[MAX_OUTPUT_PLUGINS];
 
 /******************************************************************************
 Description.: print help for this plugin to stdout

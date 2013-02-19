@@ -46,7 +46,7 @@
 #endif
 
 static globals *pglobal;
-extern context servers[MAX_OUTPUT_PLUGINS];
+extern context_http servers[MAX_OUTPUT_PLUGINS];
 
 /******************************************************************************
 Description.: initializes the iobuffer structure properly
@@ -971,7 +971,7 @@ Return Value: -
 ******************************************************************************/
 void server_cleanup(void *arg)
 {
-    context *pcontext = arg;
+    context_http *pcontext = arg;
     int i;
 
     OPRINT("cleaning up ressources allocated by server thread #%02d\n", pcontext->id);
@@ -1000,7 +1000,7 @@ void *server_thread(void *arg)
     int err;
     int i;
 
-    context *pcontext = arg;
+    context_http *pcontext = arg;
     pglobal = pcontext->pglobal;
 
     /* set cleanup handler to cleanup ressources */
