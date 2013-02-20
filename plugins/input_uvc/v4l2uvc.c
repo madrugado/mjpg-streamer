@@ -418,7 +418,7 @@ int put_v4l2_exif(unsigned char *out, const struct timeval *time)
      * we'll use 000 as format. 
      */
     if (time) {
-	suseconds_t subtimestamp = time->tv_usec - (time->tv_usec / 1000) * 1000;
+	suseconds_t subtimestamp = time->tv_usec % 1000;
 	snprintf(subtime_buf, 4, "%03d", subtimestamp);
 	subtime = subtime_buf;
     } else
