@@ -535,7 +535,7 @@ int put_v4l2_exif(unsigned char *out, const struct timeval *time)
     // TODO: replace with more straight way
 	out[0] = 0xFF;
 	out[1] = 0xE1;
-	put_uint16(out + 2, marker_len);
+	put_uint16(out + 2, marker_len + 2);
 	
 	memcpy(out + 4, marker, marker_len);
 
